@@ -114,6 +114,17 @@ pub struct Tokens {
     pub sheet_macro_footprint: Color32,
     pub sheet_macro_conflict: Color32,
     pub sheet_macro_target: Color32,
+    /// The agent sidebar's own colour (its mark, status dot, changes card) and the surfaces it
+    /// tints; `sheet_agent` outlines the agent's target range on the (white) sheet.
+    pub agent: Color32,
+    pub agent_soft: Color32,
+    pub agent_wash: Color32,
+    pub agent_border: Color32,
+    pub on_agent: Color32,
+    pub sheet_agent: Color32,
+    /// What the agent's outline is painted in on a dark sheet: the dark sheet turns every colour
+    /// painted on it over (`grid::dark_sheet`), and this one comes out as the dark theme's `agent`.
+    pub sheet_agent_dark: Color32,
 }
 
 /// The eight category colours, in the order of [`Tokens::cat`].
@@ -146,6 +157,8 @@ const SHEET_MACRO_INPUT: Color32 = rgb(0x2E6FD8);
 const SHEET_MACRO_FOOTPRINT: Color32 = rgb(0x23803D);
 const SHEET_MACRO_CONFLICT: Color32 = rgb(0xC42B1C);
 const SHEET_MACRO_TARGET: Color32 = rgb(0x6B3FC0);
+/// The agent's target outline on the white sheet, the same in both themes.
+const SHEET_AGENT: Color32 = rgb(0x6B4FD8);
 
 /// Code colours for one background; plain text uses the surface's own text colour.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -244,6 +257,13 @@ impl Tokens {
             sheet_macro_footprint: SHEET_MACRO_FOOTPRINT,
             sheet_macro_conflict: SHEET_MACRO_CONFLICT,
             sheet_macro_target: SHEET_MACRO_TARGET,
+            agent: pick(dark, rgb(0x6B4FD8), rgb(0xA08CF5)),
+            agent_soft: pick(dark, rgb(0xEEEAFB), rgb(0x2C2648)),
+            agent_wash: pick(dark, rgb(0xF7F5FE), rgb(0x221F33)),
+            agent_border: pick(dark, rgb(0xDDD5F7), rgb(0x3D3560)),
+            on_agent: pick(dark, Color32::WHITE, rgb(0x16112B)),
+            sheet_agent: SHEET_AGENT,
+            sheet_agent_dark: rgb(0x1C0967),
         }
     }
 
@@ -567,6 +587,12 @@ mod contrast_tests {
         add("text on current step", t.text, t.accent_soft, TEXT);
         add("current step arrow", t.accent, t.accent_soft, GLYPH);
         add("error marker on window", t.danger, t.window, GLYPH);
+        // The agent sidebar.
+        add("agent mark on its tile", t.agent, t.agent_soft, GLYPH);
+        add("agent colour on ribbon", t.agent, t.ribbon, TEXT);
+        add("agent colour on its card header", t.agent, t.agent_wash, TEXT);
+        add("text on agent", t.on_agent, t.agent, TEXT);
+        add("agent outline on sheet", t.sheet_agent, t.grid_bg, GLYPH);
         v
     }
 

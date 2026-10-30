@@ -205,6 +205,8 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                 let status_w = (rect.width() * 0.42).clamp(320.0, 620.0).min(rect.width() * 0.6);
                 let status = Rect::from_min_max(pos2(rect.right() - status_w, rect.top()), rect.max).shrink2(vec2(8.0, 0.0));
                 let mut child = ui.new_child(egui::UiBuilder::new().max_rect(status).layout(egui::Layout::left_to_right(egui::Align::Center)));
+                // Items that do not fit (a narrow sheet beside the agent sidebar) are cut, not drawn over the tabs.
+                child.set_clip_rect(status.intersect(ui.clip_rect()));
                 status_items(app, &mut child);
                 Rect::from_min_max(rect.min, pos2(status.left() - 8.0, rect.bottom()))
             } else {

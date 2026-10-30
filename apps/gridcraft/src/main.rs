@@ -1,6 +1,7 @@
 //! GridCraft desktop app.
 //!
 //! Usage: `gridcraft [--control <port> [--control-token <token>]] [--sample <name>] [files…]`
+//! (`gridcraft --mcp-bridge ADDR` is the MCP server the agent sidebar gives its agent).
 //!
 //! `--control <port>` (or `GRIDCRAFT_CONTROL_PORT`) starts a localhost JSON-lines control
 //! server: `{"id":1,"method":"ui.inspect","params":{}}` → `{"id":1,"ok":true,"result":…}`.
@@ -9,6 +10,7 @@
 #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod agent;
 #[cfg(target_os = "macos")]
 mod apple_events;
 mod control_server;
@@ -200,6 +202,7 @@ fn services() -> Services {
         printers: Some(print::discover()),
         print_native: Some(print::submit()),
         thumbnail_dir: if prefs_enabled() { config_dir().map(|d| d.join("thumbnails")) } else { None },
+        agent: agent::launch(),
         ..Default::default()
     }
 }
@@ -260,6 +263,18 @@ fn main() -> eframe::Result<()> {
     if let Some(done) = craft_update::self_update::finish(&gridcraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
         if let Err(e) = done {
             eprintln!("GridCraft update helper failed: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+    // The agent sidebar's MCP server: stdio only, no window.
+    if args.first().map(String::as_str) == Some("--mcp-bridge") {
+        let Some(addr) = args.get(1) else {
+            eprintln!("usage: gridcraft --mcp-bridge HOST:PORT (token in GRIDCRAFT_CONTROL_TOKEN)");
+            std::process::exit(2);
+        };
+        if let Err(e) = agent::mcp_bridge(addr) {
+            eprintln!("gridcraft: {e}");
             std::process::exit(1);
         }
         return Ok(());

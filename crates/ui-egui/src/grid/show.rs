@@ -935,6 +935,7 @@ pub(crate) fn paint_overlays(input: OverlayInput<'_>) {
     if let Some(o) = &app.grid.macro_overlay {
         crate::macro_editor::paint_overlay(p, geo, sh, o);
     }
+    crate::agent::paint_overlay(app, p, geo, sh);
     // Trace precedents / dependents arrows.
     if let Some(trace) = &app.grid.trace
         && app.session.active().is_some_and(|d| d.uid == trace.uid && d.revision == trace.revision)

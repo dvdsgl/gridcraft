@@ -3,7 +3,11 @@
 //! `cargo run --release -p gridcraft-ui-egui --example snapshot -- [--sample sales] [--in file.xlsx]
 //!  [--size 1440x900] [--scale 2] [--cmd 'id={json}']... [--tab Insert] [--dark] [--theme darkGreen|omarchy] [--backstage] [--language en|es|zh|ja|ko|ru|pt|de|cs|fr|tr]
 //!  [--dialog 'name={json}'] [--hf-edit header|footer]
-//!  [--quick-analysis formatting|charts|totals] out.png`
+//!  [--quick-analysis formatting|charts|totals] [--agent collapsed|empty|conversation|working] out.png`
+//!
+//! `--agent` shows the agent sidebar in one of its states, driven by a scripted fake agent (no
+//! process, no network): its reads and writes go through the sidebar's control channel as a real
+//! agent's MCP tools would.
 
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::SheetApp;
@@ -27,6 +31,7 @@ fn main() {
     let mut quick: Option<String> = None;
     let mut language: Option<String> = None;
     let mut hf_edit: Option<String> = None;
+    let mut agent: Option<String> = None;
     let mut out = "snapshot.png".to_string();
     let mut i = 0;
     while i < args.len() {
@@ -86,6 +91,10 @@ fn main() {
                 i += 1;
                 quick = args.get(i).cloned();
             }
+            "--agent" => {
+                i += 1;
+                agent = args.get(i).cloned();
+            }
             "--language" => {
                 i += 1;
                 language = args.get(i).cloned();
@@ -124,6 +133,10 @@ fn main() {
             eprintln!("{id}: {e}");
         }
     }
+    let script = fake::Script::default();
+    let (control_tx, rx) = std::sync::mpsc::channel();
+    let control_rx = std::rc::Rc::new(std::cell::RefCell::new(Some(rx)));
+    let agent_state = agent.clone();
     let mut harness =
         egui_kittest::Harness::builder().with_size(egui::vec2(size.0, size.1)).with_pixels_per_point(scale).with_max_steps(12).wgpu().build_ui_state(
             move |ui, app: &mut SheetApp| {
@@ -133,6 +146,9 @@ fn main() {
             },
             {
                 let mut app = SheetApp::new(session, Default::default());
+                if agent.is_some() {
+                    app.services.agent = Some(fake::launch(script.clone(), control_rx.clone()));
+                }
                 app.ui.dark = dark;
                 app.ui.palette = palette.clone();
                 if backstage {
@@ -172,6 +188,9 @@ fn main() {
             harness.run_steps(2);
         }
     }
+    if let Some(state) = &agent_state {
+        fake::play(&mut harness, state, &script, &control_tx);
+    }
     // --quick-analysis formatting|charts|totals: the Quick Analysis card open on that tab.
     if let Some(tab) = &quick {
         gridcraft_ui_egui::quick_analysis::open(&harness.ctx, tab);
@@ -180,4 +199,113 @@ fn main() {
     let img = harness.render().expect("render");
     img.save(&out).expect("save png");
     eprintln!("wrote {out} ({}x{})", img.width(), img.height());
+}
+
+/// A scripted agent for `--agent`: events go to the sidebar through a shared queue, and its tool
+/// calls through the sidebar's control channel.
+mod fake {
+    use std::cell::RefCell;
+    use std::collections::VecDeque;
+    use std::rc::Rc;
+    use std::sync::mpsc::{Receiver, Sender};
+
+    use gridcraft_ui_egui::agent::{AgentConnection, AgentEvent, AgentLaunch, AgentStarted};
+    use gridcraft_ui_egui::{ControlRequest, SheetApp};
+    use serde_json::{Value, json};
+
+    #[derive(Clone, Default)]
+    pub struct Script(Rc<RefCell<VecDeque<AgentEvent>>>);
+
+    struct Conn(Script);
+
+    impl AgentConnection for Conn {
+        fn prompt(&mut self, _text: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn cancel(&mut self) {}
+        fn answer_permission(&mut self, _request: &Value, _option: Option<&str>) {}
+        fn poll(&mut self) -> Vec<AgentEvent> {
+            self.0.0.borrow_mut().drain(..).collect()
+        }
+    }
+
+    pub fn launch(script: Script, control: Rc<RefCell<Option<Receiver<ControlRequest>>>>) -> AgentLaunch {
+        AgentLaunch {
+            id: "opencode".into(),
+            name: "OpenCode".into(),
+            detail: "Omarchy default agent".into(),
+            command: "opencode acp".into(),
+            change_hint: Some("omarchy default agent".into()),
+            start: Box::new(move |_| Ok(AgentStarted { connection: Box::new(Conn(script.clone())), control: control.borrow_mut().take() })),
+        }
+    }
+
+    type H<'a> = egui_kittest::Harness<'a, SheetApp>;
+
+    fn emit(h: &mut H, script: &Script, e: AgentEvent) {
+        script.0.borrow_mut().push_back(e);
+        h.run_steps(2);
+    }
+
+    fn tool(h: &mut H, tx: &Sender<ControlRequest>, method: &str, params: Value) {
+        let (req, _reply) = ControlRequest::new(method, params);
+        let _ = tx.send(req);
+        h.run_steps(2);
+    }
+
+    fn set(h: &mut H, tx: &Sender<ControlRequest>, cell: &str, input: &str) {
+        tool(h, tx, "engine.execute", json!({"command": "cell.set", "params": {"cell": cell, "input": input}}));
+    }
+
+    pub fn play(h: &mut H, state: &str, script: &Script, tx: &Sender<ControlRequest>) {
+        if state == "collapsed" {
+            return;
+        }
+        let _ = h.state_mut().run("selection.set", json!({"range": "B11:F17"}));
+        let _ = h.state_mut().run("view.agent", json!({"on": true}));
+        h.run_steps(3);
+        if state == "empty" {
+            return;
+        }
+        let ask = "Which coffee has the thinnest margin, and why? Then add margins to the fastest-growing list.";
+        if let Err(e) = h.state_mut().run("agent.prompt", json!({"text": ask})) {
+            eprintln!("agent.prompt: {e}");
+        }
+        emit(h, script, AgentEvent::Ready { model: Some("openrouter/particle-ai/particle-1".into()) });
+        tool(h, tx, "sheet.read", json!({"range": "B10:F18"}));
+        tool(h, tx, "sheet.read", json!({"sheet": "Data", "range": "A1:H200"}));
+        emit(
+            h,
+            script,
+            AgentEvent::Message(
+                "**Sierra Decaf** has the thinnest margin at 52.4%, almost 6 points under the 58.1% average. Decaf adds a toll-processing \
+                 cost per pound, and its price hasn't moved since October.\n\nI'll add each coffee's margin next to the fastest-growing list."
+                    .into(),
+            ),
+        );
+        emit(
+            h,
+            script,
+            AgentEvent::Plan(vec![
+                ("Add a Margin column in E20:E23".into(), "in_progress".into()),
+                ("Look up each coffee's margin from the ranked table".into(), "pending".into()),
+            ]),
+        );
+        set(h, tx, "E20", "Margin");
+        set(h, tx, "E21", "=VLOOKUP(B21,$B$11:$F$17,5,FALSE)");
+        set(h, tx, "E22", "=VLOOKUP(B22,$B$11:$F$17,5,FALSE)");
+        if state == "working" {
+            h.run_steps(4);
+            return;
+        }
+        set(h, tx, "E23", "=VLOOKUP(B23,$B$11:$F$17,5,FALSE)");
+        tool(h, tx, "engine.execute", json!({"command": "home.percent", "params": {"range": "E21:E23"}}));
+        // A long list of changes on one range, so the Changes card's wrapping shows.
+        for cmd in ["home.bold", "home.italic", "home.underline", "home.alignRight", "home.wrapText", "home.strikethrough"] {
+            tool(h, tx, "engine.execute", json!({"command": cmd, "params": {"range": "E21:E23"}}));
+        }
+        emit(h, script, AgentEvent::Message("\n\nDone: E21:E23 look up each coffee's margin, so they follow the table.".into()));
+        emit(h, script, AgentEvent::TurnEnded { stop_reason: "end_turn".into() });
+        h.run_steps(4);
+    }
 }

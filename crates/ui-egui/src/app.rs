@@ -51,6 +51,7 @@ impl SheetApp {
             synthetic_pending: false,
             synthetic_injected_at_pass: None,
             control_rx: None,
+            agent: Default::default(),
             grid: grid::GridState {
                 last_border: "bottom".into(),
                 last_fill: "#FFFF00".into(),
@@ -135,6 +136,7 @@ impl SheetApp {
         // issues the capture command (after every widget, so a command cannot be missed).
         control::drain_screenshots(self, ctx);
         control::poll(self, ctx);
+        crate::agent::logic(self, ctx);
         // Printing feedback is polled once per frame, here, so hidden windows and logic-only
         // frames still see worker completion. `ui` and the desktop app no longer poll it.
         self.poll_printing(ctx);
@@ -221,6 +223,7 @@ impl SheetApp {
         if self.backstage.is_none() || self.keytips.prefix().is_some() {
             self.ribbon_keys(&ctx);
         }
+        crate::agent::keys(self, &ctx);
         if self.chrome.title_bar {
             ribbon::title_bar(self, ui);
         }
@@ -230,6 +233,8 @@ impl SheetApp {
         } else {
             ribbon::show(self, ui);
             widgets::notice_bar(self, ui);
+            // The agent sidebar runs from under the ribbon to the bottom; the sheet card narrows.
+            crate::agent::view::show(self, ui);
             if self.session.prefs.formula_bar {
                 formula_bar::show(self, ui);
             }

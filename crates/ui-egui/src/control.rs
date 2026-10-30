@@ -170,6 +170,15 @@ fn filter_commands(commands: Vec<Json>, search: Option<&str>) -> Vec<Json> {
     commands.into_iter().filter(|c| has(c, "id") || has(c, "label") || in_menu(c)).collect()
 }
 
+/// Runs one request and returns its reply line; a screenshot (which completes on a later frame)
+/// is refused. The agent sidebar runs its agent's requests this way.
+pub(crate) fn handle_now(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -> Json {
+    match handle(app, ctx, method, p) {
+        Outcome::Done(v) => v,
+        Outcome::Screenshot { .. } => json!({"ok": false, "error": "screenshots are not available to the agent sidebar's agent"}),
+    }
+}
+
 /// Dispatches one control request: commands, inspection, UI state, dialogs, editing, synthetic input, open/save/quit and screenshots. Unknown methods (and unknown command ids) return an error. Immediate answers request a repaint; `ui.screenshot` is admitted asynchronously instead of being answered here.
 pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -> Outcome {
     let s = |k: &str| p.get(k).and_then(Json::as_str);
@@ -216,11 +225,17 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             ] {
                 v.push(json!({"id": id, "label": label, "params": params, "enabled": true, "ui": true}));
             }
+            if crate::agent::available(app) {
+                for (id, label, params) in crate::agent::COMMANDS {
+                    v.push(json!({"id": id, "label": label, "params": params, "enabled": true, "ui": true}));
+                }
+            }
             ok(Json::Array(filter_commands(v, s("search"))))
         }
         "engine.journal" => ok(json!(app.session.journal.iter().map(|(id, p)| json!({"command": id, "params": p})).collect::<Vec<_>>())),
         "document.inspect" | "sheet.read" | "cell.get" | "selection.stats" => wrap(direct(app, method, p, false)),
         "ui.inspect" => ok(inspect(app, ctx)),
+        "ui.agent" => ok(crate::agent::inspect(app)),
         "ui.ribbon" => {
             app.ui.ribbon_tab = s("tab").unwrap_or("Home").to_string();
             app.ui.ribbon_collapsed = false;

@@ -44,6 +44,9 @@ pub struct Services {
     /// Desktop: the folder thumbnails are kept in (`thumbnails` in the settings folder); without
     /// one they are drawn again each run.
     pub thumbnail_dir: Option<std::path::PathBuf>,
+    /// Desktop: the agent the sidebar talks to (Omarchy's default agent over ACP). Without one
+    /// the sidebar and its title-bar toggle are hidden.
+    pub agent: Option<crate::agent::AgentLaunch>,
 }
 
 /// Shared queue of files read asynchronously (browser file picker, drag and drop).

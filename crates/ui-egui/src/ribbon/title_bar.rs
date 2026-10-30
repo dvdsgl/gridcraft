@@ -141,6 +141,13 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             let left_end = ui.min_rect().right();
             let right = ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(TITLE_LEFT_PAD);
+                // The agent sidebar's toggle, at the far right after a divider (native builds with
+                // a host agent only).
+                if crate::agent::available(app) {
+                    crate::agent::view::title_toggle(app, ui, ch);
+                    let (div, _) = ui.allocate_exact_size(vec2(9.0, 16.0), Sense::hover());
+                    ui.painter().rect_filled(egui::Rect::from_center_size(div.center(), vec2(1.0, 16.0)), 0.0, t.ribbon_border);
+                }
                 // Share is a quiet icon like its neighbours; its menu exports or saves a copy.
                 let share = icon_button(ui, Icon::Share, t.text, "Share: export or save a copy", vec2(30.0, ch));
                 share.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Share"));

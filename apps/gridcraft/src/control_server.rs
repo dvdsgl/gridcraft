@@ -72,20 +72,37 @@ fn make_token(port: u16, chosen: Option<String>) -> std::io::Result<String> {
     Ok(token)
 }
 
+/// Wakes the UI thread when a request arrives (egui only runs frames when something happens).
+pub type Wake = Arc<dyn Fn() + Send + Sync>;
+
 pub fn start(port: u16, chosen_token: Option<String>, ctx: egui::Context) -> std::io::Result<Receiver<ControlRequest>> {
     let listener = TcpListener::bind(("127.0.0.1", port))?;
     let token: Arc<str> = make_token(port, chosen_token)?.into();
-    let rx = serve_listener(listener, token, ctx)?;
+    let rx = serve_listener(listener, token, Arc::new(move || ctx.request_repaint()))?;
     log::info!("control channel listening on 127.0.0.1:{port}");
     Ok(rx)
 }
 
-/// Accept connections on `listener`; requests arrive on the returned receiver.
-fn serve_listener(listener: TcpListener, token: Arc<str>, ctx: egui::Context) -> std::io::Result<Receiver<ControlRequest>> {
-    serve_listener_with(listener, token, ctx, AUTH_LIMITS)
+/// A control channel of its own for one client the app starts itself (the agent sidebar's
+/// agent): a port the system picks and a fresh random token kept in memory, never written to a
+/// file. Returns the address, the token and the requests.
+pub fn start_private(wake: Wake) -> std::io::Result<(String, String, Receiver<ControlRequest>)> {
+    let listener = TcpListener::bind(("127.0.0.1", 0))?;
+    let addr = listener.local_addr()?.to_string();
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).map_err(|e| std::io::Error::other(format!("no random numbers for the control token: {e}")))?;
+    let token = control_auth::hex(&bytes);
+    let rx = serve_listener(listener, token.clone().into(), wake)?;
+    log::info!("agent control channel listening on {addr}");
+    Ok((addr, token, rx))
 }
 
-fn serve_listener_with(listener: TcpListener, token: Arc<str>, ctx: egui::Context, limits: AuthLimits) -> std::io::Result<Receiver<ControlRequest>> {
+/// Accept connections on `listener`; requests arrive on the returned receiver.
+fn serve_listener(listener: TcpListener, token: Arc<str>, wake: Wake) -> std::io::Result<Receiver<ControlRequest>> {
+    serve_listener_with(listener, token, wake, AUTH_LIMITS)
+}
+
+fn serve_listener_with(listener: TcpListener, token: Arc<str>, wake: Wake, limits: AuthLimits) -> std::io::Result<Receiver<ControlRequest>> {
     let (tx, rx) = channel();
     let waiting = Arc::new(AtomicUsize::new(0));
     std::thread::Builder::new().name("control".into()).spawn(move || {
@@ -98,10 +115,11 @@ fn serve_listener_with(listener: TcpListener, token: Arc<str>, ctx: egui::Contex
             // Dropping the stream closes it before anything is read.
             let Some(place) = Pending::claim(&waiting, limits.max_pending) else { continue };
             let tx = tx.clone();
-            let ctx = ctx.clone();
+            let wake = Arc::clone(&wake);
             let token = Arc::clone(&token);
-            let _ =
-                std::thread::Builder::new().name("control-conn".into()).spawn(move || serve(stream, &token, tx, ctx, limits.timeout, Some(place)));
+            let _ = std::thread::Builder::new()
+                .name("control-conn".into())
+                .spawn(move || serve(stream, &token, tx, &*wake, limits.timeout, Some(place)));
         }
     })?;
     Ok(rx)
@@ -219,7 +237,7 @@ fn is_http_request_line(text: &str) -> bool {
         || text.rsplit_once(' ').is_some_and(|(_, version)| version.starts_with("HTTP/"))
 }
 
-fn serve(stream: TcpStream, token: &str, tx: Sender<ControlRequest>, ctx: egui::Context, auth_timeout: Duration, place: Option<Pending>) {
+fn serve(stream: TcpStream, token: &str, tx: Sender<ControlRequest>, wake: &(dyn Fn() + Send + Sync), auth_timeout: Duration, place: Option<Pending>) {
     let Ok(read) = stream.try_clone() else { return };
     let mut out = stream;
     let mut reader = BufReader::new(read);
@@ -246,7 +264,7 @@ fn serve(stream: TcpStream, token: &str, tx: Sender<ControlRequest>, ctx: egui::
                         break;
                     }
                     // Wake the UI thread: egui only runs frames when something happens.
-                    ctx.request_repaint();
+                    wake();
                     let mut reply = rx.recv_timeout(Duration::from_secs(60)).unwrap_or_else(|_| {
                         // Give up on the request as well as on its reply. While it is still
                         // queued this keeps it from running late -- the client was told it had
@@ -298,7 +316,7 @@ mod tests {
     fn serve_on_loopback() -> (std::net::SocketAddr, Receiver<ControlRequest>) {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let addr = listener.local_addr().unwrap();
-        (addr, serve_listener(listener, TOKEN.into(), egui::Context::default()).unwrap())
+        (addr, serve_listener(listener, TOKEN.into(), Arc::new(|| {})).unwrap())
     }
 
     /// A browser can POST to the port: its request line closes the connection before the JSON
@@ -368,7 +386,7 @@ mod tests {
         std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {
                 let tx = tx.clone();
-                std::thread::spawn(move || serve(stream, TOKEN, tx, egui::Context::default(), AUTH_TIMEOUT, None));
+                std::thread::spawn(move || serve(stream, TOKEN, tx, &|| {}, AUTH_TIMEOUT, None));
             }
         });
         addr
@@ -446,7 +464,7 @@ mod tests {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let addr = listener.local_addr().unwrap();
         let limits = AuthLimits { timeout: Duration::from_millis(300), max_pending: MAX_PENDING_AUTH };
-        let _rx = serve_listener_with(listener, TOKEN.into(), egui::Context::default(), limits).unwrap();
+        let _rx = serve_listener_with(listener, TOKEN.into(), Arc::new(|| {}), limits).unwrap();
 
         let silent = TcpStream::connect(addr).unwrap();
         let mut slow = TcpStream::connect(addr).unwrap();
@@ -473,7 +491,7 @@ mod tests {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let addr = listener.local_addr().unwrap();
         let limits = AuthLimits { timeout: Duration::from_secs(20), max_pending: 2 };
-        let _rx = serve_listener_with(listener, TOKEN.into(), egui::Context::default(), limits).unwrap();
+        let _rx = serve_listener_with(listener, TOKEN.into(), Arc::new(|| {}), limits).unwrap();
 
         let mut first = TcpStream::connect(addr).unwrap();
         let _second = TcpStream::connect(addr).unwrap();

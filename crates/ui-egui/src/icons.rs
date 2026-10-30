@@ -1163,6 +1163,12 @@ fn paint_paths(p: &Painter, rect: Rect, grid: f32, paths: &[&str], width: f32, c
     }
 }
 
+/// Draws SVG path data drawn on a `grid`-unit square (24 for Lucide-style line icons) into
+/// `rect`, with strokes of `width` units at 16 px, scaled with the icon.
+pub(crate) fn paint_svg(p: &Painter, rect: Rect, grid: f32, paths: &[&str], width: f32, c: Color32) {
+    paint_paths(p, rect, grid, paths, width, c);
+}
+
 /// Draws a Lucide icon in `rect`, its 2 px strokes scaled to the icon size (1.33 px at 16 px).
 fn paint_lucide(p: &Painter, rect: Rect, name: &str, c: Color32) -> bool {
     let Some(shapes) = lucide_shapes(name) else { return false };
